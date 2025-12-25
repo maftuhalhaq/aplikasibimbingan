@@ -5,97 +5,116 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Bimbingan;
+use App\Models\Skripsi;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 
 class BimbinganController extends Controller
 {
-    // Fungsi Upload (Mahasiswa)
-    // 1. FUNGSI UPLOAD (Store)
+    // =================================================================
+    // 1. FUNGSI UPLOAD (MAHASISWA)
+    // =================================================================
     public function store(Request $request)
     {
-        $request->validate([
+        // Validasi
+        $validator = Validator::make($request->all(), [
+            'skripsi_id' => 'required',
             'catatan' => 'required',
-            'file' => 'required|file|mimes:pdf,doc,docx|max:10240',
+            'file_dokumen' => 'required|mimes:pdf|max:5120', // Max 5MB biar aman
         ]);
 
-        // PERBAIKAN DISINI: Tambahkan ->latest()
-        // Agar mengambil skripsi paling baru (ID 11), bukan yang lama (ID 1)
-        $skripsi = \App\Models\Skripsi::where('user_id', $request->user()->id)
-            ->latest() // <--- WAJIB ADA
-            ->first();
-
-        if (!$skripsi) {
-            return response()->json(['message' => 'Judul tidak ditemukan'], 404);
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi Gagal',
+                'data' => $validator->errors()
+            ], 400);
         }
 
-        $path = null;
-        if ($request->hasFile('file')) {
-            $path = $request->file('file')->store('files', 'public');
+        // Simpan File
+        if ($request->hasFile('file_dokumen')) {
+            $path = $request->file('file_dokumen')->store('bimbingan', 'public');
+
+            $bimbingan = Bimbingan::create([
+                'skripsi_id' => $request->skripsi_id,
+                'catatan' => $request->catatan,
+                'status' => 'pending', // Default status
+                'file_path' => $path,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Bimbingan berhasil dikirim',
+                'data' => $bimbingan
+            ], 201);
         }
 
-        $bimbingan = Bimbingan::create([
-            'skripsi_id' => $skripsi->id,
-            'catatan' => $request->catatan,
-            'file_path' => $path,
-            'status' => 'Revisi'
-        ]);
-
-        return response()->json(['message' => 'Berhasil', 'data' => $bimbingan]);
+        return response()->json([
+            'success' => false,
+            'message' => 'File tidak ditemukan / Gagal Upload'
+        ], 400);
     }
 
-    // 2. FUNGSI LIST (Index - Mahasiswa)
+    // =================================================================
+    // 2. FUNGSI LIST (MAHASISWA) - PERBAIKAN UTAMA DISINI
+    // =================================================================
     public function index(Request $request)
     {
-        // PERBAIKAN DISINI JUGA
-        $skripsi = \App\Models\Skripsi::where('user_id', $request->user()->id)
-            ->latest() // <--- WAJIB ADA
-            ->first();
+        // A. TANGKAP ID DARI ANDROID
+        $skripsi_id = $request->query('skripsi_id');
 
-        if (!$skripsi) {
-            return response()->json(['data' => []]);
+        // B. LOGIKA PENCARIAN
+        if ($skripsi_id) {
+            // Jika Android mengirim ID, pakai ID itu (LEBIH AKURAT)
+            $data = Bimbingan::where('skripsi_id', $skripsi_id)
+                ->orderBy('created_at', 'desc')
+                ->get();
+        } else {
+            // FALLBACK: Jika Android lupa kirim ID, cari manual via User
+            $skripsi = Skripsi::where('user_id', $request->user()->id)
+                ->latest()
+                ->first();
+
+            if ($skripsi) {
+                $data = Bimbingan::where('skripsi_id', $skripsi->id)
+                    ->orderBy('created_at', 'desc')
+                    ->get();
+            } else {
+                $data = collect([]); // Kosong
+            }
         }
 
-        $bimbingan = Bimbingan::where('skripsi_id', $skripsi->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
-
-        return response()->json(['data' => $bimbingan]);
+        // C. RETURN JSON LENGKAP (SESUAI MODEL ANDROID)
+        // Android butuh: success, message, data
+        return response()->json([
+            'success' => true,
+            'message' => 'List Data Bimbingan',
+            'data' => $data
+        ], 200);
     }
 
-    // Fungsi Lihat List (Dosen)
+    // =================================================================
+    // 3. FUNGSI LIST (DOSEN)
+    // =================================================================
     public function indexDosen(Request $request)
     {
-        // 1. Cek ID Dosen yang sedang login
         $idDosen = $request->user()->id;
-        \Illuminate\Support\Facades\Log::info("--- DEBUG DOSEN ---");
-        \Illuminate\Support\Facades\Log::info("Dosen yang Login ID: " . $idDosen);
 
-        // 2. Cek Query Database
+        // Query ambil semua bimbingan milik mahasiswa bimbingan dosen ini
         $data = Bimbingan::whereHas('skripsi', function ($query) use ($idDosen) {
             $query->where('dosen_id', $idDosen);
         })
-            ->with('skripsi.user')
+            ->with('skripsi.user') // Load relasi user untuk dapat nama mahasiswa
             ->orderBy('created_at', 'desc')
             ->get();
 
-        // 3. Cek Berapa Data yang Ditemukan
-        \Illuminate\Support\Facades\Log::info("Jumlah Bimbingan Ditemukan: " . $data->count());
-
-        if ($data->count() > 0) {
-            // Cek detail data pertama biar yakin
-            \Illuminate\Support\Facades\Log::info("Contoh Data ID: " . $data[0]->id);
-            \Illuminate\Support\Facades\Log::info("Milik Mahasiswa: " . $data[0]->skripsi->user->name);
-        } else {
-            \Illuminate\Support\Facades\Log::info("DATA KOSONG! Cek apakah tabel bimbingan punya skripsi_id yang mengarah ke dosen_id ini.");
-        }
-
-        // ... (Lanjutan mapping data seperti biasa) ...
+        // Mapping Data agar rapi di Android
         $result = $data->map(function ($item) {
             return [
                 'id' => $item->id,
-                'student_id' => $item->skripsi->user_id,
-                'judul' => $item->skripsi ? $item->skripsi->judul : 'Judul dihapus',
-                'nama_mahasiswa' => ($item->skripsi && $item->skripsi->user) ? $item->skripsi->user->name : 'Mhs Terhapus',
+                'student_id' => $item->skripsi->user_id ?? 0,
+                'judul' => $item->skripsi->judul ?? 'Judul Tidak Ada',
+                'nama_mahasiswa' => $item->skripsi->user->name ?? 'Mahasiswa Dihapus',
                 'catatan' => $item->catatan,
                 'status' => $item->status,
                 'created_at' => $item->created_at->format('Y-m-d H:i'),
@@ -103,50 +122,57 @@ class BimbinganController extends Controller
             ];
         });
 
-        return response()->json(['data' => $result]);
+        // Format JSON Dosen juga harus lengkap
+        return response()->json([
+            'success' => true,
+            'message' => 'List Bimbingan Mahasiswa',
+            'data' => $result
+        ], 200);
     }
 
-    // Fungsi Update Status (Dosen) - BAGIAN KRUSIAL
+    // =================================================================
+    // 4. FUNGSI UPDATE STATUS (DOSEN)
+    // =================================================================
     public function update(Request $request, $id)
     {
         $bimbingan = Bimbingan::with('skripsi.user')->find($id);
 
         if (!$bimbingan) {
-            return response()->json(['message' => 'Data tidak ditemukan'], 404);
+            return response()->json(['success' => false, 'message' => 'Data tidak ditemukan'], 404);
         }
 
-        // 1. UPDATE DATABASE (Sukses disini)
+        // Update Database
         $bimbingan->update(['status' => $request->status]);
 
-        // 2. KIRIM NOTIFIKASI (Dengan Pengaman)
+        // Kirim Notifikasi FCM (Opsional, dibungkus Try-Catch agar tidak bikin error)
         try {
-            // Cek kelengkapan data sebelum kirim
             if ($bimbingan->skripsi && $bimbingan->skripsi->user) {
                 $user = $bimbingan->skripsi->user;
-
-                // Cek apakah user punya token FCM & fungsi curl ada
-                if ($user->fcm_token && function_exists('curl_init')) {
-                    $title = "Status Skripsi Baru!";
-                    $body = "Status bimbingan Anda kini: " . $request->status;
-
-                    $this->sendFCM($user->fcm_token, $title, $body);
+                if ($user->fcm_token) {
+                    $this->sendFCM(
+                        $user->fcm_token,
+                        "Status Bimbingan Diupdate",
+                        "Dosen mengubah status menjadi: " . $request->status
+                    );
                 }
             }
         } catch (\Throwable $e) {
-            // JIKA ERROR, DIAM SAJA (Cuma catat di log server)
-            // Jangan biarkan error ini membuat respon ke Android jadi Gagal
-            Log::error("Gagal kirim notif FCM: " . $e->getMessage());
+            Log::error("FCM Error: " . $e->getMessage());
         }
 
-        // 3. KIRIM RESPON SUKSES KE ANDROID
-        return response()->json(['message' => 'Status berhasil diupdate']);
+        return response()->json([
+            'success' => true,
+            'message' => 'Status berhasil diubah menjadi ' . $request->status
+        ]);
     }
 
-    // Fungsi Helper FCM (Private)
+    // =================================================================
+    // HELPER: KIRIM NOTIFIKASI
+    // =================================================================
     private function sendFCM($token, $title, $body)
     {
-        // GANTI DENGAN SERVER KEY FIREBASE KAMU YANG ASLI
-        $serverKey = 'AAAA_GANTI_DENGAN_KEY_PANJANG_DARI_FIREBASE_CONSOLE';
+        // Masukkan Server Key Firebase Anda disini
+        $serverKey = 'GANTI_INI_DENGAN_SERVER_KEY_FIREBASE_ANDA';
 
         $url = "https://fcm.googleapis.com/fcm/send";
         $data = [
@@ -168,7 +194,7 @@ class BimbinganController extends Controller
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Bypass SSL (Penting buat Localhost)
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
 
         $result = curl_exec($ch);
