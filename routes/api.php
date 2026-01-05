@@ -54,4 +54,5 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/chat/{user_id}', [ChatController::class, 'getMessages']); // user_id adalah lawan bicara
     Route::get('/my-dosen', [ChatController::class, 'getMyDosen']); // Helper buat Mhs
 
+    Route::delete('bimbingan/{id}', [App\Http\Controllers\Api\BimbinganController::class, 'destroy']);
 });

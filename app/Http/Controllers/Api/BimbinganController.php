@@ -202,4 +202,41 @@ class BimbinganController extends Controller
 
         return $result;
     }
+
+    // =================================================================
+    // 5. FUNGSI HAPUS BIMBINGAN (MAHASISWA)
+    // =================================================================
+    public function destroy(Request $request, $id)
+    {
+        $bimbingan = Bimbingan::find($id);
+
+        if (!$bimbingan) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data tidak ditemukan'
+            ], 404);
+        }
+
+        // Opsional: Cek apakah status masih pending?
+        // Biasanya mahasiswa tidak boleh menghapus data yang sudah di-ACC dosen.
+        if ($bimbingan->status != 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tidak bisa menghapus bimbingan yang sudah diperiksa dosen!'
+            ], 403);
+        }
+
+        // 1. Hapus File Fisik di Storage
+        if ($bimbingan->file_path && \Illuminate\Support\Facades\Storage::disk('public')->exists($bimbingan->file_path)) {
+            \Illuminate\Support\Facades\Storage::disk('public')->delete($bimbingan->file_path);
+        }
+
+        // 2. Hapus Data di Database
+        $bimbingan->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Data bimbingan berhasil dihapus'
+        ]);
+    }
 }
